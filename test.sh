@@ -19,6 +19,6 @@ try() {
 
 try 0 0
 try 42 42
-try 22 13+34-25
+try 16 "34 + 56 - 74"
 
 echo OK
