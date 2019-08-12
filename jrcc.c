@@ -1,22 +1,26 @@
 #include <ctype.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum {
-  TK_NUM = 256,
-  TK_EOF,
+typedef enum {
+  TK_RESERVED,
+  TK_NUM,
+  TK_EOF
+} TokenKind;
+
+typedef struct Token Token;
+
+struct Token {
+  TokenKind kind;
+  Token *next;
+  int val;
+  char *str;
 };
 
-typedef struct {
-  int ty;
-  int val;
-  char *input;
-} Token;
-
-char *user_input;
-Token tokens[100];
+Token *token;
 
 void error(char *fmt, ...) {
   va_list ap;
@@ -26,17 +30,47 @@ void error(char *fmt, ...) {
   exit(1);
 }
 
-void error_at(char *loc, char *msg) {
-  int pos = loc - user_input;
-  fprintf(stderr, "%s\n", user_input);
-  fprintf(stderr, "%*s", pos, "");
-  fprintf(stderr, "^ %s\n", msg);
-  exit(1);
+bool consume(char op) {
+  if(token->kind != TK_RESERVED || token->str[0] != op) {
+    return false;
+  }
+  token = token->next;
+  return true;
 }
 
-void tokenize() {
-  char *p = user_input;
-  int i = 0;
+void expect(char op) {
+  if(token->kind != TK_RESERVED || token->str[0] != op) {
+    error("'%c' ではありません", op);
+  }
+  token = token->next;
+}
+
+int expect_number() {
+  if(token->kind != TK_NUM) {
+    error("数ではありません");
+  }
+  int val = token->val;
+  token = token->next;
+  return val;
+}
+
+bool at_eof() {
+  return token->kind == TK_EOF;
+}
+
+Token *new_token(TokenKind kind, Token *cur, char *str) {
+  Token *tok = calloc(1, sizeof(Token));
+  tok->kind = kind;
+  tok->str = str;
+  cur->next = tok;
+  return tok;
+}
+
+Token *tokenize(char *p) {
+  Token head;
+  head.next = NULL;
+  Token *cur = &head;
+
   while(*p) {
     if(isspace(*p)) {
       p++;
@@ -44,25 +78,21 @@ void tokenize() {
     }
 
     if(*p == '+' || *p == '-') {
-      tokens[i].ty = *p;
-      tokens[i].input = p;
-      i++; p++;
+      cur = new_token(TK_RESERVED, cur, p++);
       continue;
     }
 
     if(isdigit(*p)) {
-      tokens[i].ty = TK_NUM;
-      tokens[i].input = p;
-      tokens[i].val = strtol(p, &p, 10);
-      i++;
+      cur = new_token(TK_NUM, cur, p);
+      cur->val = strtol(p, &p, 10);
       continue;
     }
 
-    error_at(p, "トークナイズできません");
+    error(p, "トークナイズできません");
   }
 
-  tokens[i].ty = TK_EOF;
-  tokens[i].input = p;
+  new_token(TK_EOF, cur, p);
+  return head.next;
 }
 
 int main(int argc, char **argv) {
@@ -71,38 +101,27 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  user_input = argv[1];
-  tokenize();
+  token = tokenize(argv[1]);
 
   int c = 1;
-  int i = 0;
-
-  if (tokens[0].ty != TK_NUM)
-    error_at(tokens[0].input, "数ではありません");
 
   printf("define i32 @main() {\n");
   printf("  %%%d = alloca i32, align 4\n", c);
-  printf("  store i32 %d, i32* %%%d, align 4\n", tokens[i++].val, c);
+  printf("  store i32 %d, i32* %%%d, align 4\n", expect_number(), c);
   printf("  %%%d = load i32, i32* %%%d, align 4\n", c+1, c);
 
-  while (tokens[i].ty != TK_EOF) {
-    if(tokens[i].ty == '+') {
+  while (!at_eof()) {
+    if(consume('+')) {
       c++;
-      if (tokens[++i].ty != TK_NUM)
-        error_at(tokens[i].input, "数ではありません");
-      printf("  %%%d = add i32 %%%d, %d\n", c+1, c, tokens[i++].val);
+      printf("  %%%d = add i32 %%%d, %d\n", c+1, c, expect_number());
       continue;
     }
 
-    if(tokens[i].ty == '-') {
+    if(consume('-')) {
       c++;
-      if (tokens[++i].ty != TK_NUM)
-        error_at(tokens[i].input, "数ではありません");
-      printf("  %%%d = sub i32 %%%d, %d\n", c+1, c, tokens[i++].val);
+      printf("  %%%d = sub i32 %%%d, %d\n", c+1, c, expect_number());
       continue;
     }
-
-    error_at(tokens[i].input, "予期しないトークンです");
   }
 
   printf("  ret i32 %%%d\n", c+1);
