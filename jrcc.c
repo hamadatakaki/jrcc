@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * tokenizer
+ */
+
 typedef enum {
   TK_RESERVED,
   TK_NUM,
@@ -18,23 +22,6 @@ struct Token {
   Token *next;
   int val;
   char *str;
-};
-
-typedef enum {
-  ND_ADD,
-  ND_SUB,
-  ND_MUL,
-  ND_DIV,
-  ND_NUM
-} NodeKind;
-
-typedef struct Node Node;
-
-struct Node {
-  NodeKind kind;
-  Node *lhs;
-  Node *rhs;
-  int val;
 };
 
 Token *token;
@@ -61,6 +48,86 @@ void error_at(char *loc, char *fmt, ...) {
   exit(1);
 }
 
+// unused function.
+// bool at_eof() {
+//   return token->kind == TK_EOF;
+// }
+
+Token *new_token(TokenKind kind, Token *cur, char *str) {
+  Token *tok = calloc(1, sizeof(Token));
+  tok->kind = kind;
+  tok->str = str;
+  cur->next = tok;
+  return tok;
+}
+
+Token *tokenize(char *p) {
+  Token head;
+  head.next = NULL;
+  Token *cur = &head;
+
+  while(*p) {
+    if(isspace(*p)) {
+      p++;
+      continue;
+    }
+
+    // fprintf(stderr, "token: %c\n", *p);  // DEBUG: print tokens
+
+    if(*p == '+' || *p == '-' || *p == '*' || *p == '/' || *p == '(' || *p == ')') {
+      cur = new_token(TK_RESERVED, cur, p++);
+      continue;
+    }
+
+    if(isdigit(*p)) {
+      cur = new_token(TK_NUM, cur, p);
+      cur->val = strtol(p, &p, 10);
+      continue;
+    }
+
+    error(p, "トークナイズできません");
+  }
+
+  new_token(TK_EOF, cur, p);
+  return head.next;
+}
+
+/*
+ * parser
+ */
+
+typedef enum {
+  ND_ADD,
+  ND_SUB,
+  ND_MUL,
+  ND_DIV,
+  ND_NUM
+} NodeKind;
+
+typedef struct Node Node;
+
+struct Node {
+  NodeKind kind;
+  Node *lhs;
+  Node *rhs;
+  int val;
+};
+
+Node *new_node(NodeKind kind, Node *lhs, Node *rhs) {
+  Node *node = calloc(1, sizeof(Node));
+  node->kind = kind;
+  node->lhs = lhs;
+  node->rhs = rhs;
+  return node;
+}
+
+Node *new_node_num(int val) {
+  Node *node = calloc(1, sizeof(Node));
+  node->kind = ND_NUM;
+  node->val = val;
+  return node;
+}
+
 bool consume(char op) {
   if(token->kind != TK_RESERVED || token->str[0] != op) {
     return false;
@@ -85,61 +152,9 @@ int expect_number() {
   return val;
 }
 
-bool at_eof() {
-  return token->kind == TK_EOF;
-}
-
-Token *new_token(TokenKind kind, Token *cur, char *str) {
-  Token *tok = calloc(1, sizeof(Token));
-  tok->kind = kind;
-  tok->str = str;
-  cur->next = tok;
-  return tok;
-}
-
-Token *tokenize(char *p) {
-  Token head;
-  head.next = NULL;
-  Token *cur = &head;
-
-  while(*p) {
-    if(isspace(*p)) {
-      p++;
-      continue;
-    }
-
-    if(*p == '+' || *p == '-') {
-      cur = new_token(TK_RESERVED, cur, p++);
-      continue;
-    }
-
-    if(isdigit(*p)) {
-      cur = new_token(TK_NUM, cur, p);
-      cur->val = strtol(p, &p, 10);
-      continue;
-    }
-
-    error(p, "トークナイズできません");
-  }
-
-  new_token(TK_EOF, cur, p);
-  return head.next;
-}
-
-Node *new_node(NodeKind kind, Node *lhs, Node *rhs) {
-  Node *node = calloc(1, sizeof(Node));
-  node->kind = kind;
-  node->lhs = lhs;
-  node->rhs = rhs;
-  return node;
-}
-
-Node *new_node_num(int val) {
-  Node *node = calloc(1, sizeof(Node));
-  node->kind = ND_NUM;
-  node->val = val;
-  return node;
-}
+Node *expr();
+Node *mul();
+Node *term();
 
 Node *expr() {
   Node *node = mul();
@@ -177,6 +192,86 @@ Node *term() {
   return new_node_num(expect_number());
 }
 
+/*
+ * asm generate
+ */
+
+typedef int ad_ptr_t;
+static ad_ptr_t apc = 1; // IR paramater's address counter
+
+#define GEN_STACK_SIZE 256
+typedef ad_ptr_t stack_data_t;
+stack_data_t paramater_stack[GEN_STACK_SIZE];
+int sp = 0; // stack pointer
+
+void push(stack_data_t data) {
+  if(sp<GEN_STACK_SIZE) {
+    paramater_stack[sp] = data;
+    sp++;
+  } else {
+    perror("stack over flow!\n");
+  }
+}
+
+void pop(stack_data_t *data) {
+  if(sp>0) {
+    sp--;
+    *data = paramater_stack[sp];
+  } else if(sp==0) {
+    printf("stack is empty!\n");
+    exit(1);
+  } else {
+    printf("stack pointer is not negative number. but sp = %d\n", sp);
+    exit(1);
+  }
+}
+
+void gen_op(NodeKind kind, ad_ptr_t first, ad_ptr_t second) {
+  switch(kind) {
+    case ND_ADD:
+      printf("  %%%d = add nsw i32 %%%d, %%%d\n", apc, first, second);
+      break;
+    case ND_SUB:
+      printf("  %%%d = sub nsw i32 %%%d, %%%d\n", apc, first, second);
+      break;;
+    case ND_MUL:
+      printf("  %%%d = mul nsw i32 %%%d, %%%d\n", apc, first, second);
+      break;
+    case ND_DIV:
+      printf("  %%%d = sdiv i32 %%%d, %%%d\n", apc, first, second);
+      break;
+    default:
+      printf("the handled kind is not OP.\n");
+      exit(1);
+  }
+  push(apc++);
+}
+
+void gen(Node *node) {
+  if(node->kind == ND_NUM) {
+    printf("  %%%d = alloca i32, align 4\n", apc);
+    printf("  store i32 %d, i32* %%%d, align 4\n", node->val, apc);
+    printf("  %%%d = load i32, i32* %%%d, align 4\n", apc+1, apc);
+    apc++;
+    push(apc++);
+    return;
+  }
+
+  gen(node->lhs);
+  gen(node->rhs);
+
+  ad_ptr_t second;
+  ad_ptr_t first;
+  pop(&second);
+  pop(&first);
+
+  gen_op(node->kind, first, second);
+}
+
+/*
+ * main function
+ */
+
 int main(int argc, char **argv) {
   if (argc != 2) {
     fprintf(stderr, "invalid arguments error\n");
@@ -184,30 +279,13 @@ int main(int argc, char **argv) {
   }
 
   user_input = argv[1];
-  token = tokenize(argv[1]);
-
-  int c = 1;
+  token = tokenize(user_input);
+  Node *node = expr();
 
   printf("define i32 @main() {\n");
-  printf("  %%%d = alloca i32, align 4\n", c);
-  printf("  store i32 %d, i32* %%%d, align 4\n", expect_number(), c);
-  printf("  %%%d = load i32, i32* %%%d, align 4\n", c+1, c);
+  gen(node);
 
-  while (!at_eof()) {
-    if(consume('+')) {
-      c++;
-      printf("  %%%d = add i32 %%%d, %d\n", c+1, c, expect_number());
-      continue;
-    }
-
-    if(consume('-')) {
-      c++;
-      printf("  %%%d = sub i32 %%%d, %d\n", c+1, c, expect_number());
-      continue;
-    }
-  }
-
-  printf("  ret i32 %%%d\n", c+1);
+  printf("  ret i32 %%%d\n", apc-1);
   printf("}\n");
   return 0;
 }
